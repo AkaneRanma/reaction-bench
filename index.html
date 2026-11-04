@@ -1,0 +1,992 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>反应时基准 · 本地</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{
+    --bg:#0c0f12; --card:#12171d; --line:rgba(255,255,255,.07);
+    --fg:#e8eef5; --dim:#8b96a3; --dim2:#5c6773;
+    --go:#14e070; --ink:#03240f; --wait:#c0242a;
+    --ok:#3ddc84; --warn:#f2b544;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
+    font:15px/1.55 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+    -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+
+  #stage{position:fixed;inset:0;cursor:pointer;
+    background:radial-gradient(130% 100% at 50% -10%,#161d25 0%,#0c0f12 58%)}
+  #stage.clean #ui{visibility:hidden}
+
+  /* 刺激物：居中的圆盘，红的等、绿的点。只变圆盘，不闪整屏 */
+  #board{position:absolute;left:50%;top:50%;width:clamp(200px,34vmin,320px);aspect-ratio:1;
+    transform:translate(-50%,-50%);border-radius:50%;display:none;align-items:center;justify-content:center;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.07),0 18px 50px rgba(0,0,0,.5)}
+  #stage[data-phase="wait"] #board{display:flex;background:var(--wait)}
+  #stage[data-phase="go"] #board{display:flex;background:var(--go);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.14),0 0 64px rgba(20,224,112,.30)}
+
+  #ui{position:absolute;inset:0;display:grid;grid-template-rows:auto 1fr auto;
+    padding:18px clamp(16px,3.4vw,40px) 16px;gap:10px}
+
+  /* ---- 顶栏 ---- */
+  #top{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:26px}
+  .brand{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--dim);
+    letter-spacing:.14em}
+  .brand .mark{width:7px;height:7px;border-radius:2px;background:var(--ok);
+    box-shadow:0 0 10px rgba(61,220,132,.7)}
+  .badge{display:flex;align-items:center;gap:7px;font-size:12px;padding:4px 11px;border-radius:999px;
+    border:1px solid var(--line);background:rgba(255,255,255,.035);color:var(--dim);
+    font-variant-numeric:tabular-nums;white-space:nowrap}
+  .badge .d{width:6px;height:6px;border-radius:50%;background:var(--dim2);flex:none}
+  .badge.ok{color:#a9ecc4}.badge.ok .d{background:var(--ok);box-shadow:0 0 8px rgba(61,220,132,.9)}
+  .badge.warn{color:#f6d79a}.badge.warn .d{background:var(--warn);box-shadow:0 0 8px rgba(242,181,68,.9)}
+
+  /* ---- 中央 ---- */
+  #center{display:flex;flex-direction:column;align-items:center;justify-content:center;
+    text-align:center;gap:6px;min-height:0}
+  #title{font-size:13px;color:var(--dim);letter-spacing:.2em;min-height:20px}
+  #title:empty,#meta:empty,#list:empty,#hist:empty{display:none}
+
+  /* 开始按钮：只在空闲态出现，给画面一个视觉落点 */
+  #start{display:none;place-items:center;width:154px;height:154px;border-radius:50%;padding:0;
+    border:1px solid rgba(255,255,255,.13);color:var(--fg);cursor:pointer;font:inherit;
+    font-size:15px;letter-spacing:.3em;text-indent:.3em;
+    background:radial-gradient(circle at 50% 34%,rgba(61,220,132,.10),rgba(255,255,255,.015) 72%);
+    transition:border-color .18s,box-shadow .18s,transform .16s,background .18s;margin-bottom:14px}
+  #start:hover{border-color:rgba(61,220,132,.55);
+    box-shadow:0 0 0 7px rgba(61,220,132,.055),0 0 34px rgba(61,220,132,.16)}
+  #start:active{transform:scale(.975)}
+  #stage[data-phase="idle"] #start{display:grid}
+  #big{font-size:clamp(60px,12.5vw,150px);font-weight:700;line-height:1;letter-spacing:-.035em;
+    font-variant-numeric:tabular-nums;min-height:1em;min-width:1px;display:flex;align-items:baseline;
+    gap:.06em}
+  #big:empty{display:none}
+  #big .unit{font-size:clamp(15px,2vw,26px);font-weight:500;letter-spacing:0;color:var(--dim)}
+  #meta{font-size:14px;color:var(--dim);font-variant-numeric:tabular-nums;min-height:22px;margin-top:2px}
+  #list{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:10px;max-width:min(860px,92vw)}
+  #list span{font-size:13px;padding:3px 11px;border-radius:999px;font-variant-numeric:tabular-nums;
+    background:rgba(255,255,255,.045);border:1px solid var(--line);color:#cfd8e2}
+  #list span.best{color:#0a2c16;background:var(--ok);border-color:var(--ok);font-weight:600}
+  #hist{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:8px}
+  #hist .rchip{font-size:12px;padding:2px 10px;border-radius:999px;color:var(--dim);
+    border:1px solid var(--line);font-variant-numeric:tabular-nums}
+  #hist .rchip b{color:var(--fg);font-weight:600}
+  #hint{font-size:13px;color:var(--dim2);margin:14px 0 0;max-width:620px;line-height:1.75}
+  #hint b{color:#c7d2de;font-weight:600}
+  kbd{border:1px solid #3d4550;border-bottom-width:2px;border-radius:5px;padding:0 5px;font-size:.92em;
+    color:#cfd8e2}
+
+  /* ---- 底栏 ---- */
+  #foot{display:flex;flex-direction:column;gap:10px;background:var(--card);
+    border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+  #stats{display:flex;gap:8px;font-variant-numeric:tabular-nums;flex-wrap:wrap}
+  .stat{display:flex;align-items:baseline;gap:6px;font-size:12.5px;color:var(--dim);
+    padding:3px 10px;border-radius:8px;background:rgba(255,255,255,.03);border:1px solid var(--line)}
+  .stat b{color:var(--fg);font-weight:600;font-size:12.5px}
+  .stat b i{font-style:normal;color:var(--dim2);font-size:11px;margin-left:1px}
+  .stat b.thr{color:var(--warn)}
+  #opts{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--dim)}
+  #opts .lbl{margin-right:2px;color:var(--dim2)}
+  #opts button,.mini{font:inherit;font-size:12.5px;padding:4px 12px;border-radius:8px;cursor:pointer;
+    background:rgba(255,255,255,.045);color:#c8d2dd;border:1px solid var(--line);
+    transition:background .12s,color .12s,border-color .12s}
+  #opts button:hover,.mini:hover{background:rgba(255,255,255,.09);color:#eaf1f8}
+  #opts button[aria-pressed="true"]{background:var(--ok);color:#062b13;border-color:var(--ok);font-weight:600}
+  .mini{font-size:11.5px;padding:3px 10px}
+  #log{font-size:12px;color:var(--dim);min-height:22px}
+  .loghead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:var(--dim2)}
+  .loghead b{color:#c7d2de;font-weight:600;font-variant-numeric:tabular-nums}
+  .loghead .tail{margin-left:auto}
+  .days{display:flex;flex-direction:column;gap:2px;margin-top:7px;font-variant-numeric:tabular-nums}
+  .day{display:flex;gap:10px;color:var(--dim2)}
+  .day b{color:#b9c5d2;font-weight:500}
+  .empty{color:var(--dim2);font-size:12px}
+  .spark{display:block;height:104px;width:auto;opacity:.95;flex:none;margin-left:2px}
+
+  /* ---- 结果页（仿 realme/arealme 版式） ---- */
+  #result{display:none;width:100%;max-width:1280px;text-align:left}
+  #stage[data-phase="roundEnd"] #result{display:block;margin:auto 0}
+  #stage[data-phase="roundEnd"] #center>:not(#result){display:none}
+  #stage[data-phase="roundEnd"] #top{display:none}
+  /* #top 一旦 display:none，自动排布会把 #center 塞进 auto 行、把 #foot 塞进 1fr 行，
+     结果整页贴顶、下面空一大片 —— 必须显式锁定行号 */
+  #stage[data-phase="roundEnd"] #center{grid-row:2;overflow:auto;justify-content:flex-start;
+    scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.16) transparent}
+  #center::-webkit-scrollbar{width:8px;height:0}
+  #center::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:4px}
+  #center::-webkit-scrollbar-track{background:transparent}
+  #stage[data-phase="roundEnd"] #foot{grid-row:3}
+  .rhead{font-size:12.5px;letter-spacing:.26em;color:var(--dim);text-align:center;margin:0 0 8px}
+  /* 标准设备是本机 165Hz，曲线不做跨设备换算；左右两张卡只给"那两个网站会显示多少" */
+  .rwrap{display:grid;grid-template-columns:minmax(148px,186px) minmax(0,1fr) minmax(148px,186px);
+    gap:clamp(10px,1.4vw,22px);align-items:start;width:100%}
+  .rwrap>.side{margin-top:clamp(0px,.6vh,8px)}
+  .rmain{min-width:0}
+  @media (max-width:1240px){
+    .rwrap{grid-template-columns:1fr 1fr}
+    .rmain{grid-column:1/-1;order:-1}
+    .side{min-height:0;padding:clamp(10px,1.4vh,16px) 12px}
+    .rcard{min-height:0}
+  }
+  .side{display:flex;flex-direction:column;justify-content:center;gap:7px;text-align:center;
+    min-height:clamp(150px,17vh,200px);
+    background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.012));
+    border:1px solid var(--line);border-radius:14px;
+    padding:clamp(12px,1.8vh,20px) clamp(11px,1vw,16px)}
+  .sname{font-size:11px;letter-spacing:.08em;color:var(--dim);text-transform:uppercase}
+  .snum{font-size:clamp(25px,2.3vw,33px);font-weight:700;line-height:1.06;
+    font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+  .snum span{font-size:12px;font-weight:500;color:var(--dim);margin-left:2px;letter-spacing:0}
+  .snum.hb{color:#ffd479}.snum.ar{color:#8fd6ff}
+  .slbl{font-size:11px;color:var(--dim2);margin-top:-2px}
+  .snote{font-size:10.5px;color:#5c6773;line-height:1.55}
+  .slink{align-self:center;display:inline-block;margin-top:2px;font-size:12px;font-weight:600;
+    text-decoration:none;color:#0b1116;background:#cfd8e2;border-radius:8px;padding:6px 10px}
+  .slink:hover{filter:brightness(1.09)}
+  .rdev{font-size:11px;color:var(--dim2);text-align:center;margin-top:2px}
+  .rhint{font-size:12px;color:var(--dim2);text-align:center;margin-top:9px}
+  .rcard{display:grid;grid-template-columns:minmax(230px,1fr) minmax(0,1.05fr);
+    gap:clamp(16px,2vw,30px);align-items:center;min-height:clamp(176px,30vh,340px);
+    background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.015));
+    border:1px solid var(--line);border-radius:16px;padding:clamp(14px,2.1vh,26px) clamp(16px,2vw,30px)}
+  .rlabel{font-size:12px;color:var(--dim2);letter-spacing:.05em}
+  .rnum{font-size:clamp(42px,5.2vw,78px);font-weight:700;line-height:1.02;letter-spacing:-.04em;
+    font-variant-numeric:tabular-nums}
+  .rnum span{font-size:clamp(17px,1.5vw,24px);font-weight:500;color:var(--dim);letter-spacing:0;margin-left:2px}
+  .rverdict{font-size:clamp(15px,1.35vw,19px);font-weight:600;margin-top:-1px}
+  .rverdict.ok{color:var(--ok)}.rverdict.mid{color:#a8b3c0}
+  .rverdict.warn{color:var(--warn)}.rverdict.bad{color:#ff6b6b}
+  .rnote{font-size:12px;color:var(--dim2);margin-top:6px}
+  .rnote b{color:#c7d2de;font-weight:600}
+  .rchart{width:100%;height:auto;display:block}
+  .rcards{display:grid;grid-template-columns:repeat(4,1fr);gap:clamp(8px,1.1vw,14px);
+    margin-top:clamp(10px,1.8vh,20px)}
+  .mc{background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:12px;
+    padding:clamp(9px,2vh,22px) 10px;text-align:center}
+  .mc span{display:block;font-size:clamp(11.5px,1vw,13px);color:var(--dim2);margin-bottom:2px}
+  .mc b{font-size:clamp(19px,2.1vw,27px);font-weight:600;font-variant-numeric:tabular-nums}
+  .mc b i{font-style:normal;font-size:11px;color:var(--dim2);margin-left:1px}
+  .mc b.good{color:var(--ok)}.mc b.bad{color:#ff6b6b}
+  .rpct{margin-top:clamp(12px,2.2vh,28px)}
+  .rpline{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;color:var(--dim);gap:10px}
+  .rpline b{color:var(--fg);font-variant-numeric:tabular-nums;font-weight:600}
+  .rpline .src{color:var(--dim2);font-size:11px}
+  .rbar{position:relative;height:11px;margin:18px 0 5px;border-radius:6px;background:rgba(255,255,255,.06)}
+  .rfill{position:absolute;left:0;top:0;bottom:0;border-radius:6px}
+  .rmark{position:absolute;top:-7px;width:2px;height:25px;background:#e8eef5;border-radius:1px;
+    box-shadow:0 0 0 1px rgba(0,0,0,.45)}
+  .rticks{display:flex;justify-content:space-between;font-size:10.5px;color:var(--dim2);font-variant-numeric:tabular-nums}
+  .ractions{margin-top:clamp(14px,2.4vh,30px);display:flex;align-items:center;gap:10px;
+    justify-content:center;flex-wrap:wrap}
+  .btn-primary{font:inherit;font-size:clamp(14px,1.25vw,16px);font-weight:600;
+    padding:clamp(9px,1.4vh,13px) clamp(24px,2.4vw,34px);border-radius:10px;cursor:pointer;
+    background:var(--ok);color:#062b13;border:0;transition:filter .15s}
+  .btn-primary:hover{filter:brightness(1.07)}
+  .ractions .dim{font-size:12px;color:var(--dim2)}
+
+  /* 窗口矮于 900px 时结果页整体收一档，否则底栏会压住"再玩一次" */
+  @media (max-height: 900px){
+    .rcard{min-height:clamp(126px,20vh,176px);
+      padding:clamp(10px,1.5vh,16px) clamp(14px,1.8vw,22px)}
+    .rnum{font-size:clamp(38px,4.6vw,62px)}
+    .rchart{max-height:min(152px,18vh)}
+    .rcards{margin-top:clamp(8px,1.2vh,12px)}
+    .mc{padding:clamp(7px,1.3vh,14px) 10px}
+    .rpct{margin-top:clamp(8px,1.5vh,14px)}
+    .ractions{margin-top:clamp(6px,1.1vh,12px)}
+  }
+
+  /* ---- 点击动效 ---- */
+  .ripple{position:fixed;width:18px;height:18px;margin:-9px 0 0 -9px;border-radius:50%;
+    border:1.5px solid rgba(255,255,255,.9);pointer-events:none;z-index:9;
+    animation:rip .45s cubic-bezier(.2,.7,.3,1) forwards}
+  @keyframes rip{from{transform:scale(.35);opacity:.95}to{transform:scale(5);opacity:0}}
+  #board{transition:transform .1s ease-out}
+  #board.press{transform:translate(-50%,-50%) scale(.955)}
+  #board.shake{animation:shk .34s ease}
+  @keyframes shk{0%,100%{transform:translate(-50%,-50%)}
+    22%{transform:translate(calc(-50% - 7px),-50%)}
+    48%{transform:translate(calc(-50% + 7px),-50%)}
+    74%{transform:translate(calc(-50% - 4px),-50%)}}
+
+  /* ---- 测试中的实时 HUD ---- */
+  #live{position:fixed;inset:0;pointer-events:none;z-index:7;
+    display:grid;grid-template-rows:auto 1fr auto;padding:16px 24px 22px}
+  #stage[data-phase="idle"] #live,#stage[data-phase="roundEnd"] #live{display:none}
+  #stage[data-phase="wait"] #top,#stage[data-phase="go"] #top,
+  #stage[data-phase="flash"] #top{visibility:hidden}
+  #stage[data-phase="wait"] #foot,#stage[data-phase="go"] #foot,
+  #stage[data-phase="flash"] #foot{visibility:hidden}
+  #stage[data-phase="flash"] #board{visibility:hidden}
+  .lt{display:flex;align-items:center;gap:14px}
+  .ln{font-size:14px;font-weight:500;color:var(--dim2);font-variant-numeric:tabular-nums;letter-spacing:.02em}
+  .ln b{font-size:18px;font-weight:600;color:var(--fg)}
+  .ls{margin:0 5px;color:var(--dim2)}
+  .lbar{flex:1;height:5px;border-radius:3px;background:rgba(255,255,255,.07);overflow:hidden}
+  #lfill{height:100%;width:0;border-radius:3px;
+    background:linear-gradient(90deg,#2bbd6f,var(--ok));transition:width .3s ease-out}
+  .lav{display:flex;align-items:baseline;gap:5px;font-size:11.5px;color:var(--dim2)}
+  .lav b{font-size:15px;font-weight:600;color:var(--fg);font-variant-numeric:tabular-nums}
+  .lx{pointer-events:auto;font:inherit;font-size:13px;line-height:1;width:26px;height:26px;border-radius:50%;
+    border:0;cursor:pointer;background:rgba(255,255,255,.07);color:var(--dim2);
+    display:flex;align-items:center;justify-content:center;transition:background .15s,color .15s}
+  .lx:hover{background:rgba(255,255,255,.14);color:var(--fg)}
+  /* 圆盘半径 = clamp(100px,17vmin,160px)，字就贴在圈上方 30px */
+  /* 圆盘半径 = clamp(100px,17vmin,160px)；44px 里含文字行高，视觉留 16px 空隙贴在圈上方 */
+  .lc{position:absolute;left:0;right:0;top:calc(50% - clamp(100px,17vmin,160px) - 46px);
+    display:flex;justify-content:center;align-items:flex-end;height:40px}
+  #wtext{font-size:clamp(17px,2.3vmin,25px);color:#cfd8e2;letter-spacing:.16em;font-weight:500}
+  #stage[data-phase="go"] .lc,#stage[data-phase="flash"] .lc{visibility:hidden}
+  /* 变绿那一帧只留圆盘，底部曲线先藏起来（visibility 不重排） */
+  #stage[data-phase="go"] .lb{visibility:hidden}
+  .dots{font-style:normal;margin-left:2px;letter-spacing:.12em}
+  .dots b{display:inline-block;font-size:1.25em;line-height:1;opacity:.3;
+    animation:dotfade 1.5s infinite}
+  .dots b:nth-child(1){animation-delay:0s}
+  .dots b:nth-child(2){animation-delay:.5s}
+  .dots b:nth-child(3){animation-delay:1s}
+  @keyframes dotfade{0%,100%{opacity:.3}18%,45%{opacity:1}}
+  /* 变绿那一帧别让任何动画在跑，纯保险 */
+  #stage[data-phase="go"] .dots b,#stage[data-phase="flash"] .dots b{animation-play-state:paused}
+  .lb{display:flex;align-items:flex-end;justify-content:center}
+  .lcs{width:min(420px,52vw);height:auto;overflow:visible}
+
+  /* ---- 隐形 ET 锚点：文字与底色同色 + 1% 不透明度，肉眼不可见但确有绘制 ---- */
+  .stim{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+    font-size:12px;line-height:1;white-space:pre;color:var(--go);opacity:.01;
+    pointer-events:none;-webkit-user-select:none;user-select:none}
+</style>
+
+<div id="stage" data-phase="idle">
+  <div id="ui">
+    <div id="top">
+      <div class="brand"><span class="mark"></span>反应时基准</div>
+      <div id="badge" class="badge"><span class="d"></span>自检中…</div>
+    </div>
+
+    <div id="center">
+      <div id="result"></div>
+      <button id="start" class="start" type="button">开始</button>
+      <div id="title"></div>
+      <div id="big"></div>
+      <div id="meta"></div>
+      <div id="list"></div>
+      <div id="hist"></div>
+      <p id="hint"></p>
+    </div>
+
+    <div id="foot">
+      <div class="row">
+        <div id="stats"></div>
+        <div id="opts"></div>
+      </div>
+      <div id="log"></div>
+    </div>
+  </div>
+  <div id="live" aria-hidden="true">
+    <div class="lt">
+      <span class="ln"><b id="lnum">1</b><span class="ls">/</span><span id="ltot">5</span></span>
+      <div class="lbar"><div id="lfill"></div></div>
+      <span class="lav"><span>平均</span><b id="lavg">—</b><span>ms</span></span>
+      <button id="lx" class="lx" type="button" title="结束本轮">✕</button>
+    </div>
+    <div class="lc"><span id="wtext">等待变绿<i class="dots"><b>.</b><b>.</b><b>.</b></i></span></div>
+    <div class="lb" id="lchart"></div>
+  </div>
+
+  <div id="board"></div>
+  <div id="layer"></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var WAIT_MIN = 2000, WAIT_MAX = 4500, SETTLE_MS = 110, START_LOCK_MS = 700;
+  var HKEY = 'rt-fair.v1';
+
+  var stage = document.getElementById('stage');
+  var badge = document.getElementById('badge');
+  var titleEl = document.getElementById('title');
+  var big = document.getElementById('big');
+  var metaEl = document.getElementById('meta');
+  var listEl = document.getElementById('list');
+  var histEl = document.getElementById('hist');
+  var hintEl = document.getElementById('hint');
+  var statsEl = document.getElementById('stats');
+  var logEl = document.getElementById('log');
+  var optsEl = document.getElementById('opts');
+  var layer = document.getElementById('layer');
+  var board = document.getElementById('board');
+  var resultEl = document.getElementById('result');
+  var liveEl = document.getElementById('live');
+  var lnumEl = document.getElementById('lnum'), ltotEl = document.getElementById('ltot');
+  var lfillEl = document.getElementById('lfill'), lavgEl = document.getElementById('lavg');
+  var lchartEl = document.getElementById('lchart'), lxEl = document.getElementById('lx');
+  var startBtn = document.getElementById('start');
+  if (startBtn) startBtn.addEventListener('click', function (e) { e.preventDefault(); });
+
+  var roundSize = 5;
+  var hz = 0, hzThrottled = false, hzSuspect = 0, hzBusy = false, hzQueue = false;
+  var mHz = 0, mSamples = 0;
+  var probeOk = false, probeSeen = false;
+
+  var S = {
+    phase: 'idle', round: [], rounds: [],
+    early: 0, earlyRound: 0, etHit: 0,
+    seq: 0, etSeq: 0, etRender: null, rafOnset: null,
+    timer: 0, rafId: 0, lock: 0
+  };
+
+  /* ---------------- 工具 ---------------- */
+  function fx(x) { return (Math.round(x * 10) / 10).toFixed(1); }
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function dayKey(ts) {
+    var d = new Date(ts);
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  }
+  function stats(a) {
+    var s = a.slice().sort(function (x, y) { return x - y; }), n = s.length, i, mean = 0;
+    for (i = 0; i < n; i++) mean += s[i];
+    mean = n ? mean / n : 0;
+    var med = !n ? 0 : (n % 2 ? s[(n - 1) >> 1] : (s[n / 2 - 1] + s[n / 2]) / 2);
+    var v = 0;
+    for (i = 0; i < n; i++) v += (s[i] - mean) * (s[i] - mean);
+    return { n: n, mean: mean, med: med, min: s[0], max: s[n - 1], sd: n ? Math.sqrt(v / n) : 0 };
+  }
+  function setPhase(p) { S.phase = p; stage.dataset.phase = p; }
+  function clean(on) { stage.classList.toggle('clean', on); }
+  function clearBig() { big.innerHTML = ''; }
+
+  /* ---------------- Element Timing ---------------- */
+  var etSupported = false;
+  try {
+    etSupported = !!(window.PerformanceObserver && PerformanceObserver.supportedEntryTypes &&
+      PerformanceObserver.supportedEntryTypes.indexOf('element') >= 0);
+  } catch (e) { etSupported = false; }
+
+  if (etSupported) {
+    try {
+      new PerformanceObserver(function (l) {
+        var es = l.getEntries();
+        for (var i = 0; i < es.length; i++) {
+          var en = es[i];
+          var id = en.identifier || en.name || '';
+          if (id === '__probe') { probeSeen = true; continue; }
+          var m = /^rt-(\d+)$/.exec(id);
+          if (!m) continue;
+          if (parseInt(m[1], 10) !== S.etSeq) continue;
+          var t = en.renderTime || en.startTime;
+          if (t > 0 && (S.etRender === null || t < S.etRender)) S.etRender = t;
+        }
+      }).observe({ type: 'element', buffered: true });
+    } catch (e) { etSupported = false; }
+  }
+
+  function stimNode(id, text) {
+    var d = document.createElement('div');
+    d.className = 'stim';
+    d.setAttribute('elementtiming', id);
+    d.textContent = text;
+    return d;
+  }
+
+  function probeET(done) {
+    if (!etSupported) { done(); return; }
+    var el = stimNode('__probe', '·');
+    el.style.color = '#0c0f12';
+    layer.appendChild(el);
+    var t0 = performance.now();
+    var iv = setInterval(function () {
+      if (probeSeen || performance.now() - t0 > 700) {
+        clearInterval(iv);
+        if (el.parentNode) el.parentNode.removeChild(el);
+        probeOk = probeSeen;
+        done();
+      }
+    }, 60);
+  }
+
+  /* ---------------- 刷新率：两次取样取高 ---------------- */
+  /* 采样 60 帧，用去掉上下各 10% 的帧间隔均值反推刷新率。
+     不能用 n/总时长：偶尔有一帧时间戳跨时钟跳变（实测出现过 200807ms 的"间隔"），
+     一个坏帧就能把 165Hz 读成 131Hz。 */
+  function sampleHz(cb) {
+    var last = -1, ds = [], fin = false;
+    requestAnimationFrame(function (ts) {
+      last = ts;
+      requestAnimationFrame(function loop(t) {
+        var d = t - last;
+        if (d > 1 && d < 100) ds.push(d);   // 正常帧间隔 2~50ms，其余一律当噪声
+        last = t;
+        if (ds.length < 60) { requestAnimationFrame(loop); return; }
+        fin = true;
+        ds.sort(function (a, b) { return a - b; });
+        var cut = Math.floor(ds.length * 0.1), i, s = 0, k = 0;
+        for (i = cut; i < ds.length - cut; i++) { s += ds[i]; k++; }
+        cb(k > 5 ? 1000 / (s / k) : -1);
+      });
+    });
+    setTimeout(function () { if (!fin) { fin = true; cb(-1); } }, 3000);
+  }
+  function measureHz(done) {
+    // 并发调用（load 后定时测 + resize 触发）会互相抢帧，两边都读出偏低值，
+    // 这里串行化：正在测就把这次请求排队，等当前测完再补一次
+    if (hzBusy) { hzQueue = true; return; }
+    hzBusy = true;
+    var fin = function () { hzBusy = false; if (hzQueue) { hzQueue = false; measureHz(); } };
+    // 取 3 个窗口的最大值：FreeSync/VRR 下空闲时合成器可能跑在 138 之类的中转率，
+    // 单窗口会给屏幕"降级"，最大值才代表面板上限
+    var best = -1, left = 2;
+    (function step() {
+      sampleHz(function (a) {
+        if (a > best) best = a;
+        if (--left > 0) { step(); return; }
+        if (best < 0) { hzThrottled = true; renderStats(); fin(); if (done) done(); return; }
+        // 低值不覆盖已验证的高值，连续两次偏低才认为屏幕真的换了刷新率
+        if (hz === 0 || best >= hz * 0.93) { hz = best; hzSuspect = 0; }
+        else if (++hzSuspect >= 2) { hz = best; hzSuspect = 0; }
+        hzThrottled = false;
+        renderStats();
+        fin();
+        if (done) done();
+      });
+    })();
+  }
+
+  /* ---------------- 鼠标回报率 ---------------- */
+  var mBuf = [], mPrev = 0, mLastPaint = 0;
+  window.addEventListener('pointermove', function (ev) {
+    var list = (ev.getCoalescedEvents ? ev.getCoalescedEvents() : null);
+    if (!list || !list.length) list = [ev];
+    var prev = mPrev || 0, i;
+    for (i = 0; i < list.length; i++) {
+      var t = list[i].timeStamp;
+      if (prev && t > prev) {
+        var d = t - prev;
+        if (d > 0.05 && d < 60) mBuf.push(d);
+      }
+      prev = t;
+    }
+    mPrev = prev;
+    if (mBuf.length > 600) mBuf = mBuf.slice(-600);
+    var now = performance.now();
+    if (mBuf.length >= 40 && now - mLastPaint > 400) {
+      mLastPaint = now;
+      var s = mBuf.slice().sort(function (a, b) { return a - b; });
+      var med = s[(s.length - 1) >> 1];
+      var v = med > 0 ? 1000 / med : 0;
+      if (v >= 20 && v <= 12000) { mHz = v; mSamples = s.length; renderStats(); }
+    }
+  }, { passive: true });
+
+  /* ---------------- 状态条 ---------------- */
+  function renderStats() {
+    var h = hzThrottled ? '<b class="thr">被节流</b>'
+      : (hz ? '<b>' + hz.toFixed(1) + '<i>Hz</i></b>' : '<b>测量中</b>');
+    var m = mHz ? '<b>' + (mHz >= 100 ? Math.round(mHz) : fx(mHz)) + '<i>Hz</i></b>'
+      : '<b style="color:var(--dim2);font-weight:400">未采样</b>';
+    statsEl.innerHTML =
+      '<span class="stat"><span>屏幕</span>' + h + '</span>' +
+      '<span class="stat"><span>鼠标</span>' + m + '</span>';
+    refreshBadge();
+  }
+
+  function refreshBadge() {
+    if (hzThrottled) {
+      badge.className = 'badge warn';
+      badge.innerHTML = '<span class="d"></span>窗口被遮挡，渲染被节流';
+      return;
+    }
+    if (probeOk) {
+      badge.className = 'badge ok';
+      badge.innerHTML = '<span class="d"></span>Element Timing 真实渲染时刻';
+    } else if (hz) {
+      var f = 1000 / hz;
+      badge.className = 'badge warn';
+      badge.innerHTML = '<span class="d"></span>rAF 兜底 · 偏高 ' + f.toFixed(0) + '–' + (2 * f).toFixed(0) + ' ms';
+    } else {
+      badge.className = 'badge';
+      badge.innerHTML = '<span class="d"></span>自检中…';
+    }
+  }
+
+  /* ---------------- 历史 ---------------- */
+  var hist = [];
+  function loadHist() {
+    try {
+      var raw = localStorage.getItem(HKEY);
+      hist = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(hist)) hist = [];
+    } catch (e) { hist = []; }
+  }
+  function saveHist() {
+    try { localStorage.setItem(HKEY, JSON.stringify(hist.slice(-400))); } catch (e) {}
+  }
+  function spark() {
+    if (hist.length < 2) return '';
+    var ms = hist.slice(-10).map(function (h) { return h.m; });
+    var n = ms.length, w = 300, h = 104, pl = 36, pr = 10, pt = 12, pb = 20;
+    var mn = Math.min.apply(null, ms), mx = Math.max.apply(null, ms), sum = 0, i;
+    for (i = 0; i < n; i++) sum += ms[i];
+    var mean = sum / n;
+    var span = Math.max(mx - mn, 14), pad = Math.max(span * 0.16, 1.5);
+    var lo = Math.max(0, mn - pad), hi = mx + pad;
+    function X(k) { return n === 1 ? (pl + w - pr) / 2 : pl + k * (w - pl - pr) / (n - 1); }
+    function Y(v) { return h - pb - (v - lo) / (hi - lo) * (h - pt - pb); }
+    var usedY = [];
+    function ref(v, color, dash) {
+      var y = Y(v), lbl = '';
+      if (!usedY.some(function (q) { return Math.abs(q - y) < 10; })) {
+        usedY.push(y);
+        lbl = '<text x="' + (pl - 6) + '" y="' + (y + 3.2).toFixed(1) + '" fill="' + color +
+          '" font-size="9" text-anchor="end">' + Math.round(v) + '</text>';
+      }
+      return '<line x1="' + pl + '" y1="' + y.toFixed(1) + '" x2="' + (w - pr) + '" y2="' + y.toFixed(1) +
+        '" stroke="' + color + '" stroke-width="1"' + (dash ? ' stroke-dasharray="4 3"' : '') + '/>' + lbl;
+    }
+    var pts = ms.map(function (v, j) { return X(j).toFixed(1) + ',' + Y(v).toFixed(1); }).join(' ');
+    var dots = ms.map(function (v, j) {
+      var best = v === mn;
+      return '<circle cx="' + X(j).toFixed(1) + '" cy="' + Y(v).toFixed(1) + '" r="' + (best ? 3.4 : 2.8) +
+        '" fill="' + (best ? '#3ddc84' : '#e8eef5') + '"/>' +
+        '<text x="' + X(j).toFixed(1) + '" y="' + (h - 6) + '" fill="#5c6773" font-size="9"' +
+        ' text-anchor="middle">' + (j + 1) + '</text>';
+    }).join('');
+    return '<svg class="spark" width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h +
+      '" aria-hidden="true">' +
+      ref(mx, '#3a434f', false) + ref(mean, '#3ddc84', true) + ref(mn, '#3a434f', false) +
+      '<polyline points="' + pts + '" fill="none" stroke="#cfd8e2" stroke-width="1.5"' +
+      ' stroke-linejoin="round" stroke-linecap="round"/>' + dots + '</svg>';
+  }
+  function renderLog() {
+    if (!hist.length) {
+      logEl.innerHTML = '<div class="empty">还没有历史记录，跑完一轮就会存在这里</div>';
+      return;
+    }
+    var all = [], i;
+    for (i = 0; i < hist.length; i++) all = all.concat(hist[i].v);
+    var byDay = {}, order = [];
+    for (i = 0; i < hist.length; i++) {
+      var k = dayKey(hist[i].t);
+      if (!byDay[k]) { byDay[k] = []; order.push(k); }
+      byDay[k].push(hist[i]);
+    }
+    order = order.slice(-5).reverse();
+    var rows = order.map(function (k) {
+      var rs = byDay[k], vs = [];
+      rs.forEach(function (r) { vs = vs.concat(r.v); });
+      return '<div class="day"><span>' + k.slice(5) + '</span><span>' + rs.length +
+        ' 轮 · <b>' + fx(stats(vs).med) + '</b> ms</span></div>';
+    }).join('');
+    logEl.innerHTML =
+      '<div class="loghead"><span>共 <b>' + hist.length + '</b> 轮 · ' + all.length +
+      ' 次 · 总中位数 <b>' + fx(stats(all).med) + ' ms</b></span>' + spark() +
+      '<span class="tail"><button class="mini" type="button" data-act="clear">清空</button></span></div>' +
+      '<div class="days">' + rows + '</div>';
+  }
+
+  /* ---------------- 测试中的实时 HUD ---------------- */
+  function liveChart(rts) {
+    var W = 300, H = 56, p = 8, N = Math.max(2, roundSize);
+    var axis = '<line x1="' + p + '" y1="' + (H - p) + '" x2="' + (W - p) + '" y2="' + (H - p) +
+      '" stroke="rgba(255,255,255,.09)" stroke-width="1"/>';
+    if (!rts.length) return '<svg class="lcs" viewBox="0 0 ' + W + ' ' + H + '">' + axis + '</svg>';
+    var mn = Math.min.apply(null, rts), mx = Math.max.apply(null, rts), span = (mx - mn) || 1;
+    var xy = rts.map(function (v, i) {
+      return [(p + i * (W - 2 * p) / (N - 1)).toFixed(1),
+        (H - p - (v - mn) / span * (H - 2 * p)).toFixed(1)];
+    });
+    var pts = xy.map(function (a) { return a[0] + ',' + a[1]; }).join(' ');
+    var dots = xy.map(function (a, i) {
+      var last = i === xy.length - 1;
+      return '<circle cx="' + a[0] + '" cy="' + a[1] + '" r="' + (last ? 4 : 2.8) + '" fill="' +
+        (last ? '#3ddc84' : 'rgba(232,238,245,.7)') + '"/>';
+    }).join('');
+    return '<svg class="lcs" viewBox="0 0 ' + W + ' ' + H + '">' + axis +
+      '<polyline points="' + pts + '" fill="none" stroke="rgba(207,216,226,.5)" stroke-width="1.5"' +
+      ' stroke-linejoin="round" stroke-linecap="round"/>' + dots + '</svg>';
+  }
+
+  function renderLive() {
+    var done = S.round.length, rts = [], i;
+    for (i = 0; i < done; i++) rts.push(S.round[i].rt);
+    lnumEl.textContent = Math.min(done + 1, roundSize);
+    ltotEl.textContent = roundSize;
+    lfillEl.style.width = (done / roundSize * 100).toFixed(1) + '%';
+    if (done) {
+      var m = 0;
+      for (i = 0; i < done; i++) m += rts[i];
+      lavgEl.textContent = fx(m / done);
+    } else {
+      lavgEl.textContent = '—';
+    }
+    lchartEl.innerHTML = liveChart(rts);
+  }
+
+  function abortRound() {
+    clearTimeout(S.timer); S.seq++;
+    board.innerHTML = ''; layer.innerHTML = '';
+    S.round = []; S.earlyRound = 0; S.etHit = 0;
+    showIdle();
+  }
+  lxEl.addEventListener('pointerdown', function (ev) {
+    ev.stopPropagation(); ev.preventDefault(); abortRound();
+  });
+  lxEl.addEventListener('click', function (ev) { ev.stopPropagation(); ev.preventDefault(); });
+
+  /* ---------------- 一轮 ---------------- */
+  function startRound() {
+    if (performance.now() < S.lock) return;
+    S.round = []; S.earlyRound = 0; S.etHit = 0;
+    titleEl.textContent = ''; clearBig();
+    listEl.innerHTML = ''; histEl.innerHTML = ''; metaEl.textContent = '';
+    hintEl.innerHTML = '';
+    renderLive();
+    nextTrial();
+  }
+
+  function nextTrial() {
+    if (S.round.length >= roundSize) { endRound(); return; }
+    setPhase('wait'); clean(true);
+    board.innerHTML = ''; layer.innerHTML = '';
+
+    var seq = ++S.seq;
+    S.etSeq = seq; S.etRender = null; S.rafOnset = null;
+    renderLive();
+
+    var wait = WAIT_MIN + Math.random() * (WAIT_MAX - WAIT_MIN);
+    S.timer = setTimeout(function () {
+      if (S.phase !== 'wait' || seq !== S.seq) return;
+      setPhase('go');
+      // 变绿的是圆盘；锚点插在圆盘里，与圆盘同色 + 1% 不透明，肉眼看不见但会被 ET 记录
+      board.appendChild(stimNode('rt-' + seq, '··'));
+      S.rafId = requestAnimationFrame(function () {
+        if (seq !== S.seq) return;
+        S.rafOnset = performance.now();
+      });
+    }, wait);
+  }
+
+  function settle(seq, clickT) {
+    var etOk = S.etRender !== null && S.etRender <= clickT &&
+      (S.rafOnset === null || S.etRender >= S.rafOnset - 2);
+    var onset = etOk ? S.etRender : S.rafOnset;
+    var src = etOk ? 'et' : 'raf';
+    var noOnset = (onset === null || onset === undefined);
+    if (noOnset) onset = clickT;
+    var rt = clickT - onset;
+
+    if (noOnset || !(rt > 40 && rt < 3000)) {
+      setPhase('flash'); clean(false); board.innerHTML = ''; layer.innerHTML = '';
+      titleEl.textContent = noOnset ? '这一帧没画出来' : '这次读数异常';
+      clearBig();
+      metaEl.textContent = noOnset ? '窗口被遮挡或节流了，把它拉到前台再测'
+        : 'rt = ' + fx(rt) + ' ms，重来';
+      setTimeout(function () { if (S.phase === 'flash') nextTrial(); }, 700);
+      return;
+    }
+
+    S.round.push({ rt: rt, src: src });
+    if (src === 'et') S.etHit++;
+    renderLive();
+
+    setPhase('flash'); clean(false); board.innerHTML = ''; layer.innerHTML = '';
+    titleEl.textContent = '';
+    big.innerHTML = fx(rt) + '<span class="unit">ms</span>';
+    metaEl.textContent = '第 ' + S.round.length + ' / ' + roundSize + ' 次';
+    setTimeout(function () { if (S.phase === 'flash') nextTrial(); }, 820);
+  }
+
+  /* ---------- 参考分布：humanbenchmark 直方图（70,940 次）读出的锚点 ---------- */
+  var REF = [[118, 99.8], [132, 99.5], [147, 98.9], [165, 94.9], [172, 93.1],
+    [180, 88.8], [208, 67.5], [250, 32.9], [300, 18], [350, 9], [450, 2.5], [600, 0.8]];
+
+  function beatPct(ms) {
+    if (ms <= REF[0][0]) return REF[0][1];
+    if (ms >= REF[REF.length - 1][0]) return REF[REF.length - 1][1];
+    for (var i = 0; i < REF.length - 1; i++) {
+      var a = REF[i], b = REF[i + 1];
+      if (ms >= a[0] && ms <= b[0]) {
+        var t = (ms - a[0]) / (b[0] - a[0]);
+        return a[1] + (b[1] - a[1]) * t;
+      }
+    }
+    return 50;
+  }
+  function verdictOf(p) {
+    if (p >= 90) return ['顶尖反应', 'ok'];
+    if (p >= 65) return ['快于平均', 'ok'];
+    if (p >= 40) return ['接近平均', 'mid'];
+    if (p >= 15) return ['慢于平均', 'warn'];
+    return ['远慢于平均', 'bad'];
+  }
+  function posOf(ms) { return Math.max(0, Math.min(100, (ms - 110) / (450 - 110) * 100)); }
+
+  /* ---------- 跨设备预测 ----------
+     本机 165Hz 就是标准设备，曲线不做跨设备换算；左右两张卡仍按实测比值给出两个网站的读数。 */
+  function predHb(v) { return v * 1.02; }        // 同机实测：本页 168.8 → HB 172
+  function predArealme(v) { return v * 0.79; }   // 站点内部把间隔乘 0.8（132 vs 168.8）
+
+  /* ---------- 反应曲线 ---------- */
+  function chart(rts, st) {
+    var W = 340, H = 150, pl = 38, pr = 12, pt = 16, pb = 20, n = rts.length;
+    var pad = Math.max(8, (st.max - st.min) * 0.18);
+    var lo = Math.max(0, st.min - pad), hi = st.max + pad;
+    function X(i) { return n === 1 ? (pl + W - pr) / 2 : pl + i * (W - pl - pr) / (n - 1); }
+    function Y(v) { return H - pb - (v - lo) / (hi - lo) * (H - pt - pb); }
+    function line(v, color, dash) {
+      var y = Y(v);
+      return '<line x1="' + pl + '" y1="' + y.toFixed(1) + '" x2="' + (W - pr) + '" y2="' + y.toFixed(1) +
+        '" stroke="' + color + '" stroke-width="1"' + (dash ? ' stroke-dasharray="4 3"' : '') + '/>' +
+        '<text x="' + (pl - 7) + '" y="' + (y + 3.3).toFixed(1) + '" fill="' + color +
+        '" font-size="9.5" text-anchor="end">' + Math.round(v) + '</text>';
+    }
+    var pts = rts.map(function (v, i) { return X(i).toFixed(1) + ',' + Y(v).toFixed(1); }).join(' ');
+    var dots = rts.map(function (v, i) {
+      var best = v === st.min;
+      return '<circle cx="' + X(i).toFixed(1) + '" cy="' + Y(v).toFixed(1) + '" r="' + (best ? 4.2 : 3.2) +
+        '" fill="' + (best ? '#3ddc84' : '#e8eef5') + '"/>' +
+        '<text x="' + X(i).toFixed(1) + '" y="' + (H - 5) + '" fill="#5c6773" font-size="9.5"' +
+        ' text-anchor="middle">' + (i + 1) + '</text>';
+    }).join('');
+    return '<svg class="rchart" viewBox="0 0 ' + W + ' ' + H + '" aria-hidden="true">' +
+      line(st.max, '#3a434f', false) + line(st.mean, '#3ddc84', true) + line(st.min, '#3a434f', false) +
+      '<polyline points="' + pts + '" fill="none" stroke="#cfd8e2" stroke-width="1.5" stroke-linejoin="round"/>' +
+      dots + '</svg>';
+  }
+  function bar(p, ms) {
+    var x = posOf(ms);
+    var g = p >= 65 ? 'linear-gradient(90deg,rgba(61,220,132,.32),rgba(61,220,132,.85))'
+      : p >= 40 ? 'linear-gradient(90deg,rgba(242,181,68,.28),rgba(242,181,68,.8))'
+      : 'linear-gradient(90deg,rgba(255,107,107,.28),rgba(255,107,107,.8))';
+    return '<div class="rbar"><div class="rfill" style="width:' + x.toFixed(1) + '%;background:' + g +
+      '"></div><div class="rmark" style="left:' + x.toFixed(1) + '%"></div></div>';
+  }
+  function mini(label, value, cls, unit) {
+    return '<div class="mc"><span>' + label + '</span><b' + (cls ? ' class="' + cls + '"' : '') +
+      '>' + value + (unit === '' ? '' : '<i>ms</i>') + '</b></div>';
+  }
+
+  function endRound() {
+    setPhase('roundEnd'); clean(false);
+    S.lock = performance.now() + START_LOCK_MS;
+
+    var rts = S.round.map(function (x) { return x.rt; });
+    S.rounds.push(rts);
+    var st = stats(rts);
+
+    hist.push({ t: Date.now(), m: Math.round(st.med * 10) / 10, v: rts });
+    saveHist(); renderLog();
+
+    titleEl.textContent = ''; clearBig(); metaEl.textContent = '';
+    listEl.innerHTML = ''; histEl.innerHTML = ''; hintEl.innerHTML = '';
+
+    var myMed = Math.round(st.med * 10) / 10;
+    var medsAll = hist.map(function (h) { return h.m; });
+    var faster = medsAll.filter(function (m) { return m < myMed; }).length;
+    var allRT = [];
+    hist.forEach(function (h) { allRT = allRT.concat(h.v); });
+    var bestTrial = Math.min.apply(null, allRT);
+    var p = beatPct(myMed), vd = verdictOf(p);
+
+    var note = '本机历史 <b>' + hist.length + '</b> 轮里排第 <b>' + (faster + 1) +
+      '</b>。历史最快 <b>' + fx(bestTrial) + ' ms</b>　均值 ' + fx(st.mean) +
+      '　SD ' + fx(st.sd) + '　ET ' + S.etHit + '/' + rts.length;
+    if (S.earlyRound) note += '　抢跑 ' + S.earlyRound;
+
+    var device = (hz > 20 ? Math.round(hz) + 'Hz' : '刷新率未知') +
+      ' · 鼠标 ' + (mHz ? Math.round(mHz) + 'Hz' : '未测');
+    var side = function (cls, name, num, noteTxt, href, label) {
+      return '<aside class="side">' +
+        '<div class="sname">' + name + '</div>' +
+        '<div class="snum ' + cls + '">' + fx(num) + '<span>ms</span></div>' +
+        '<div class="slbl">预计那边显示</div>' +
+        '<div class="snote">' + noteTxt + '</div>' +
+        '<a class="slink" href="' + href + '" target="_blank" rel="noopener">' + label + '</a>' +
+      '</aside>';
+    };
+
+    resultEl.innerHTML =
+      '<div class="rhead">你的成绩</div>' +
+      '<div class="rwrap">' +
+        side('hb', 'Human Benchmark', predHb(st.med),
+          '同机实测约慢 2%：那边用 new&nbsp;Date 计时',
+          'https://humanbenchmark.com/tests/reactiontime', '去那边测 →') +
+        '<div class="rmain">' +
+          '<div class="rcard">' +
+            '<div>' +
+              '<div class="rlabel">中位反应速度</div>' +
+              '<div class="rnum">' + fx(st.med) + '<span>ms</span></div>' +
+              '<div class="rverdict ' + vd[1] + '">' + vd[0] + '</div>' +
+              '<div class="rnote">' + note + '</div>' +
+            '</div>' +
+            '<div>' + chart(rts, st) +
+              '<div class="rdev">本机实测 · ' + device + '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="rcards">' +
+            mini('最快', fx(st.min), 'good') + mini('平均', fx(st.mean), '') +
+            mini('最慢', fx(st.max), 'bad') + mini('次数', String(rts.length), '', '') +
+          '</div>' +
+          '<div class="rpct">' +
+            '<div class="rpline"><span>胜过 <b>' + p.toFixed(1) + '%</b> 的人</span>' +
+              '<span class="src">参考 humanbenchmark 70,940 次样本</span></div>' +
+            bar(p, myMed) +
+            '<div class="rticks"><span>110</span><span>150</span><span>190</span><span>270</span>' +
+              '<span>350</span><span>450</span></div>' +
+          '</div>' +
+          '<div class="ractions"><button class="btn-primary" id="again" type="button">再玩一次</button>' +
+            '<span class="dim">或点任意位置 / 空格</span></div>' +
+        '</div>' +
+        side('ar', 'arealme', predArealme(st.med),
+          '那边把读数乘 0.8：实测 132 vs 本页 168.8',
+          'https://www.arealme.com/reaction-test/cn/', '← 去那边测') +
+      '</div>';
+
+    S.round = []; S.earlyRound = 0; S.etHit = 0;
+    measureHz();
+  }
+
+  /* ---------------- 输入 ---------------- */
+  function ripple(x, y) {
+    if (S.phase !== 'wait' && S.phase !== 'go') return;
+    var d = document.createElement('div');
+    d.className = 'ripple';
+    d.style.left = x + 'px'; d.style.top = y + 'px';
+    stage.appendChild(d);
+    setTimeout(function () { if (d.parentNode) d.parentNode.removeChild(d); }, 460);
+  }
+  function onPress(ev) {
+    // 结果页左右的两条外链不能当成"点任意位置重开"
+    if (ev.type === 'pointerdown' && ev.target && ev.target.closest && ev.target.closest('a')) return;
+    if (ev.type === 'pointerdown') ripple(ev.clientX, ev.clientY);
+    if (ev.type === 'keydown') {
+      if (ev.code !== 'Space' && ev.key !== ' ') return;
+      if (ev.repeat) return;
+      ev.preventDefault();
+    } else if (ev.type === 'pointerdown' && ev.button !== 0) {
+      return;
+    }
+
+    if (S.phase === 'idle' || S.phase === 'roundEnd') { startRound(); return; }
+
+    if (S.phase === 'wait') {
+      S.seq++;
+      board.classList.add('shake');
+      setTimeout(function () { board.classList.remove('shake'); }, 360);
+      clearTimeout(S.timer); cancelAnimationFrame(S.rafId);
+      S.early++; S.earlyRound++;
+      setPhase('flash'); clean(false);
+      titleEl.textContent = '抢跑了';
+      clearBig();
+      metaEl.textContent = '这次不算，重来';
+      setTimeout(function () { if (S.phase === 'flash') nextTrial(); }, 800);
+      return;
+    }
+
+    if (S.phase === 'go') {
+      board.classList.add('press');
+      setTimeout(function () { board.classList.remove('press'); }, 120);
+      var now = performance.now();
+      var t = ev.timeStamp;
+      if (!(t > 0) || Math.abs(now - t) > 2000) t = now;
+      var seq = S.seq;
+      S.seq++;
+      cancelAnimationFrame(S.rafId);
+      setTimeout(function () { settle(seq, t); }, SETTLE_MS);
+    }
+  }
+
+  /* ---------------- 空闲页 ---------------- */
+  function showIdle() {
+    setPhase('idle'); clean(false);
+    S.lock = performance.now() + START_LOCK_MS;
+    titleEl.textContent = '';
+    clearBig();
+    metaEl.textContent = '';
+    listEl.innerHTML = ''; histEl.innerHTML = '';
+    var lead = '';
+    if (hist.length) {
+      var all = [];
+      for (var i = 0; i < hist.length; i++) all = all.concat(hist[i].v);
+      lead = '上次 <b>' + fx(hist[hist.length - 1].m) + ' ms</b> · 历史中位数 <b>' +
+        fx(stats(all).med) + ' ms</b><br>';
+    }
+    hintEl.innerHTML = lead + '圆圈变绿立刻按下鼠标或 <kbd>空格</kbd>。每次间隔 2–4.5 秒随机，' +
+      '每轮 <b>' + roundSize + '</b> 次取中位数。<br>鼠标和键盘别混用 —— 两者差 10–20 ms。';
+    renderStats();
+    renderLog();
+  }
+
+  /* ---------------- 每轮次数 / 清空 ---------------- */
+  (function buildOpts() {
+    var h = '<span class="lbl">每轮</span>';
+    [3, 5, 10, 15, 20].forEach(function (n) {
+      h += '<button type="button" data-n="' + n + '" aria-pressed="' + (n === roundSize) + '">' + n + '</button>';
+    });
+    optsEl.innerHTML = h;
+  })();
+
+  function onOpt(ev) {
+    var b = ev.target.closest ? ev.target.closest('button') : null;
+    if (!b) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (b.getAttribute('data-act') === 'clear') {
+      hist = []; saveHist(); renderLog();
+      return;
+    }
+    var n = parseInt(b.getAttribute('data-n'), 10);
+    if (!n) return;
+    roundSize = n;
+    var bs = optsEl.querySelectorAll('button[data-n]');
+    for (var i = 0; i < bs.length; i++) {
+      bs[i].setAttribute('aria-pressed', String(parseInt(bs[i].getAttribute('data-n'), 10) === roundSize));
+    }
+    if (S.phase === 'idle') showIdle();
+    else hintEl.innerHTML = '下一轮生效：每轮 ' + roundSize + ' 次。';
+  }
+
+  optsEl.addEventListener('pointerdown', onOpt, { passive: false });
+  logEl.addEventListener('pointerdown', onOpt, { passive: false });
+
+  stage.addEventListener('pointerdown', onPress);
+  document.addEventListener('keydown', onPress);
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      if (S.phase === 'wait' || S.phase === 'go') {
+        S.seq++; clearTimeout(S.timer); cancelAnimationFrame(S.rafId);
+        setPhase('flash'); clean(false); board.innerHTML = ''; layer.innerHTML = '';
+        titleEl.textContent = '切走了，重来';
+        clearBig();
+        setTimeout(function () { if (S.phase === 'flash') nextTrial(); }, 800);
+      }
+    } else if (S.phase === 'idle' || S.phase === 'roundEnd') {
+      measureHz();
+    }
+  });
+
+  loadHist();
+  showIdle();
+
+  var booted = false;
+  function boot() { if (booted) return; booted = true; refreshBadge(); }
+  probeET(function () { boot(); });
+  function startMeasure() { setTimeout(function () { measureHz(boot); }, 350); }
+  if (document.readyState === 'complete') startMeasure();
+  else window.addEventListener('load', startMeasure);
+
+  window.addEventListener('resize', function () {
+    if (!S.phase || S.phase === 'idle' || S.phase === 'roundEnd') measureHz();
+  });
+
+  setInterval(function () {
+    if (hzThrottled && (S.phase === 'idle' || S.phase === 'roundEnd')) measureHz();
+  }, 3000);
+})();
+</script>
+</html>
