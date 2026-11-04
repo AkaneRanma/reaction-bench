@@ -2,7 +2,7 @@
 
 单文件网页，双击就能测，用来代替 humanbenchmark / arealme 那两个在线反应测试。
 
-- 在线版：https://akaranma.github.io/reaction-bench/
+- 在线版：https://akaneranma.github.io/reaction-bench/
 - 本地版：在这个目录下直接双击 `index.html`（`file://` 打开也照常工作，ET 与 localStorage 都实测可用）
 
 ## 为什么自己写一个
@@ -82,7 +82,7 @@ tools/syncheck.cjs 语法自检（node tools/syncheck.cjs index.html）
 git add -A && git commit -m "tweak" && git push
 ```
 
-Pages 会自动重建，一两分钟后 https://akaranma.github.io/reaction-bench/ 生效。手机浏览器扫这个地址即可，但注意 README 下面说的"换设备不可比"。
+Pages 会自动重建，一两分钟后 https://akaneranma.github.io/reaction-bench/ 生效。手机浏览器扫这个地址即可，但注意 README 下面说的"换设备不可比"。
 
 ## 附：抓包备份说明
 
