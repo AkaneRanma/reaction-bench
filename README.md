@@ -5,6 +5,8 @@
 - 在线版：https://akaneranma.github.io/reaction-bench/
 - 本地版：在这个目录下直接双击 `index.html`（`file://` 打开也照常工作，ET 与 localStorage 都实测可用）
 
+![线上页面](shots/live.png)
+
 ## 为什么自己写一个
 
 两个站点测出来差很多，不是你的问题，是它们的计时口径不一样。我把两家的前端代码扒下来看过：
